@@ -1,0 +1,81 @@
+# Heres some commands :
+# docker ps = watch how many containers is running
+# docker-compose up --build = build the docker
+# docker compose up -d = build in background
+# docker compose down / docker stop 'container id' = stop the container
+
+services:
+  poll: # Flask Python web application that gathers votes and push them into a Redis queue
+    build: ./poll
+    ports:
+      - "5000:80" # Redirect from the port 80 => 5000
+    networks:
+      - poll-tier
+    restart: always
+    environment:
+      REDIS_HOST: redis
+    depends_on: # start the service redis
+      - redis
+
+  redis: # Which holds the votes sent by the Poll application, awaiting them to be consumed by the Worker
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - back-tier
+      - poll-tier
+    restart: always
+
+  worker: # Java application which consumes the votes being in the Redis queue, and stores them into a PostgreSQL database
+    build: ./worker
+    networks:
+      - back-tier
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      REDIS_HOST: redis
+    depends_on:
+      - redis
+      - db
+    restart: always
+
+  db: # Which (persistently) stores the votes stored by the Worker service
+    image: "postgres:15-alpine"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    networks:
+      - back-tier
+      - result-tier
+    restart: always
+
+  result: # Node.js web application that fetches the votes from the database and displays them.
+    build: ./result
+    ports:
+      - "5001:80" # Redirect from port 80 => 5001
+    networks:
+      - result-tier
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+    restart: always
+    depends_on:
+      - db
+
+volumes:
+  db-data:
+
+networks:
+  poll-tier:
+  result-tier:
+  back-tier:
